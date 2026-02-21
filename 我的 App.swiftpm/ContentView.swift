@@ -4,7 +4,7 @@ import GameplayKit
 import UIKit
 
 // ============================================================
-// MARK: - Seeded Random Number Generator (鍙鐜伴殢鏈虹郴缁?
+// MARK: - Seeded Random Number Generator
 // ============================================================
 
 /// A reproducible random number generator using GKMersenneTwisterRandomSource
@@ -1122,8 +1122,8 @@ func applyGrain(to image: UIImage, intensity: CGFloat = 0.05, seed: UInt64 = 42)
         // Draw sparse grain points with seeded random
         gc.setBlendMode(.overlay)
         for _ in 0..<Int(CGFloat(width * height) * intensity * 0.1) {
-            let x = rng.nextCGFloat(in: 0..<size.width)
-            let y = rng.nextCGFloat(in: 0..<size.height)
+            let x = rng.nextCGFloat(in: 0...size.width - 1)
+            let y = rng.nextCGFloat(in: 0...size.height - 1)
             let gray = rng.nextCGFloat(in: 0...1)
             gc.setFillColor(UIColor(white: gray, alpha: 0.15).cgColor)
             gc.fillEllipse(in: CGRect(x: x, y: y, width: 1.5, height: 1.5))
@@ -3049,8 +3049,8 @@ struct ContentView: View {
             coordinator.scene?.maxLightsAllowed = challenge.maxLights
             
             // Set up callbacks
-            coordinator.scene?.onLightPlaced = { [weak self] count in
-                self?.lightsUsedInChallenge = count
+            coordinator.scene?.onLightPlaced = { count in
+                self.lightsUsedInChallenge = count
             }
             coordinator.scene?.onLightLimitReached = {
                 // Haptic feedback for limit reached
@@ -3066,9 +3066,6 @@ struct ContentView: View {
         
         refreshCanvas()
     }
-    
-    // Demo status for UI display
-    @State private var demoStatusText: String = ""
     
     // Start demo mode with enhanced visualization
     private func startDemoMode() {
@@ -3090,8 +3087,7 @@ struct ContentView: View {
             
             // Use enhanced demo with step callbacks
             coordinator.scene?.playFullDemoSequence(
-                onStep: { [weak self] step in
-                    guard let self = self else { return }
+                onStep: { step in
                     switch step {
                     case .start:
                         self.demoStatusText = "Demo: Starting..."
@@ -3106,11 +3102,11 @@ struct ContentView: View {
                         self.demoStatusText = "Demo: Final result - Seed #\(self.seed)"
                     }
                 },
-                completion: { [weak self] in
+                completion: {
                     // Auto-stop demo
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        self?.isPlayingDemo = false
-                        self?.demoStatusText = ""
+                        self.isPlayingDemo = false
+                        self.demoStatusText = ""
                     }
                 }
             )
@@ -3143,7 +3139,6 @@ struct ContentView: View {
             rules: [("F", "FF+[+F-F-F]-[-F+F+F]")],
             angle: branchAngle
         )
-        let instr = sys.generate(iterations: lifeStage.iterations)
         let linLen = max(1.0, CGFloat(sz) / pow(3.0, CGFloat(lifeStage.iterations)))
         
         let renderParams = LSystemRenderParams(
@@ -3456,7 +3451,6 @@ struct ContentView: View {
         let currentIntensity = cosmicIntensity
         let vignetteEnabled = enableVignette
         let currentPhototrop = phototropismStrength
-        let currentLightColor = UIColor(lightColor)
         
         // Get light sources
         let lightSources = getLightSourcesForRendering(canvasSize: CGSize(width: 2048, height: 2048))
@@ -3674,4 +3668,3 @@ struct ShareSheet: UIViewControllerRepresentable {
     }
     func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
-
