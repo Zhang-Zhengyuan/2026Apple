@@ -2990,7 +2990,7 @@ struct ContentView: View {
         let isUnlocked = index == nil || unlockedChallenges.contains(index!)
         let earnedStars = index != nil ? getBestStars(for: index!) : 0
         
-        Button {
+        return Button {
             if isUnlocked {
                 selectChallenge(index: index)
             }
