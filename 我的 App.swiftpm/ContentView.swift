@@ -2,6 +2,260 @@
 import SpriteKit
 import GameplayKit
 import UIKit
+import ImageIO
+import MobileCoreServices
+import UniformTypeIdentifiers
+
+// ============================================================
+// MARK: - GIF Recorder & Exporter
+// ============================================================
+
+/// GIF recording system for demo export - critical for judge submissions
+class GIFRecorder {
+    private var frames: [UIImage] = []
+    private var frameDelays: [Double] = []
+    private let targetFPS: Double
+    private let maxDuration: Double
+    
+    init(targetFPS: Double = 15, maxDuration: Double = 12.0) {
+        self.targetFPS = targetFPS
+        self.maxDuration = maxDuration
+    }
+    
+    /// Add a frame to the recording
+    func addFrame(_ image: UIImage, delay: Double? = nil) {
+        let actualDelay = delay ?? (1.0 / targetFPS)
+        frames.append(image)
+        frameDelays.append(actualDelay)
+    }
+    
+    /// Clear all recorded frames
+    func reset() {
+        frames.removeAll()
+        frameDelays.removeAll()
+    }
+    
+    /// Get frame count
+    var frameCount: Int { frames.count }
+    
+    /// Export frames as animated GIF
+    func exportGIF(completion: @escaping (URL?) -> Void) {
+        guard !frames.isEmpty else {
+            completion(nil)
+            return
+        }
+        
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            
+            // Create temporary file URL
+            let fileName = "LightOfLife_Demo_\(Int(Date().timeIntervalSince1970)).gif"
+            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+            
+            // Create GIF file
+            guard let destination = CGImageDestinationCreateWithURL(
+                tempURL as CFURL,
+                UTType.gif.identifier as CFString,
+                self.frames.count,
+                nil
+            ) else {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            
+            // Set GIF properties
+            let gifProperties: [String: Any] = [
+                kCGImagePropertyGIFDictionary as String: [
+                    kCGImagePropertyGIFLoopCount as String: 0  // Loop forever
+                ]
+            ]
+            CGImageDestinationSetProperties(destination, gifProperties as CFDictionary)
+            
+            // Add frames
+            for (index, frame) in self.frames.enumerated() {
+                guard let cgImage = frame.cgImage else { continue }
+                
+                let frameDelay = self.frameDelays[safe: index] ?? (1.0 / self.targetFPS)
+                let frameProperties: [String: Any] = [
+                    kCGImagePropertyGIFDictionary as String: [
+                        kCGImagePropertyGIFDelayTime as String: frameDelay,
+                        kCGImagePropertyGIFUnclampedDelayTime as String: frameDelay
+                    ]
+                ]
+                
+                CGImageDestinationAddImage(destination, cgImage, frameProperties as CFDictionary)
+            }
+            
+            // Finalize GIF
+            let success = CGImageDestinationFinalize(destination)
+            
+            DispatchQueue.main.async {
+                completion(success ? tempURL : nil)
+            }
+        }
+    }
+    
+    /// Export as shareable data
+    func exportGIFData(completion: @escaping (Data?) -> Void) {
+        exportGIF { url in
+            guard let url = url else {
+                completion(nil)
+                return
+            }
+            
+            let data = try? Data(contentsOf: url)
+            completion(data)
+        }
+    }
+}
+
+// ============================================================
+// MARK: - Toast Notification View
+// ============================================================
+
+/// Toast notification for instant feedback
+struct ToastView: View {
+    let message: String
+    let icon: String
+    let color: Color
+    
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(color)
+            
+            Text(message)
+                .font(.subheadline.bold())
+                .foregroundStyle(.white)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    Capsule()
+                        .stroke(color.opacity(0.3), lineWidth: 1)
+                )
+        )
+        .shadow(color: color.opacity(0.3), radius: 10, y: 5)
+    }
+}
+
+/// Toast manager for showing notifications
+class ToastManager: ObservableObject {
+    @Published var isShowing: Bool = false
+    @Published var message: String = ""
+    @Published var icon: String = "checkmark.circle.fill"
+    @Published var color: Color = .green
+    
+    private var dismissTask: DispatchWorkItem?
+    
+    func show(message: String, icon: String = "checkmark.circle.fill", color: Color = .green, duration: Double = 2.5) {
+        dismissTask?.cancel()
+        
+        self.message = message
+        self.icon = icon
+        self.color = color
+        
+        withAnimation(.spring(response: 0.4)) {
+            isShowing = true
+        }
+        
+        let task = DispatchWorkItem { [weak self] in
+            withAnimation(.easeOut(duration: 0.3)) {
+                self?.isShowing = false
+            }
+        }
+        dismissTask = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: task)
+    }
+    
+    /// Show target reached notification with coverage info
+    func showTargetReached(targetIndex: Int, coverage: Int, required: Int) {
+        show(
+            message: "Target \(targetIndex + 1): \(coverage)% coverage (need \(required)%)",
+            icon: "target",
+            color: .green,
+            duration: 2.0
+        )
+    }
+    
+    /// Show star rating explanation
+    func showStarRating(stars: Int, reason: String) {
+        let icon = stars == 3 ? "star.fill" : (stars == 2 ? "star.leadinghalf.filled" : "star")
+        show(
+            message: "\(stars) Star\(stars > 1 ? "s" : ""): \(reason)",
+            icon: icon,
+            color: stars == 3 ? .yellow : (stars == 2 ? .orange : .gray),
+            duration: 3.0
+        )
+    }
+}
+
+// ============================================================
+// MARK: - High Quality Preset Samples
+// ============================================================
+
+/// Preset sample configurations for showcase
+struct SamplePreset: Identifiable {
+    let id = UUID()
+    let name: String
+    let description: String
+    let seed: Int
+    let theme: CosmicTheme
+    let lifeStage: LifeStage
+    let branchAngle: Double
+    let phototropism: Double
+    let lightPositions: [(x: CGFloat, y: CGFloat, intensity: CGFloat)]
+    
+    static let showcasePresets: [SamplePreset] = [
+        SamplePreset(
+            name: "Cosmic Embrace",
+            description: "Balanced growth reaching for twin lights",
+            seed: 2024,
+            theme: .nebula,
+            lifeStage: .bloom,
+            branchAngle: 25.0,
+            phototropism: 18.0,
+            lightPositions: [
+                (x: 0.3, y: 0.4, intensity: 1.0),
+                (x: 0.7, y: 0.35, intensity: 0.9)
+            ]
+        ),
+        SamplePreset(
+            name: "Deep Sea Dreams",
+            description: "Bioluminescent life in the abyss",
+            seed: 8888,
+            theme: .bioluminescence,
+            lifeStage: .transcend,
+            branchAngle: 22.0,
+            phototropism: 20.0,
+            lightPositions: [
+                (x: 0.5, y: 0.25, intensity: 1.0),
+                (x: 0.25, y: 0.5, intensity: 0.7),
+                (x: 0.75, y: 0.5, intensity: 0.7)
+            ]
+        ),
+        SamplePreset(
+            name: "Aurora Dance",
+            description: "Life dancing under northern lights",
+            seed: 42,
+            theme: .aurora,
+            lifeStage: .growth,
+            branchAngle: 28.0,
+            phototropism: 15.0,
+            lightPositions: [
+                (x: 0.4, y: 0.3, intensity: 1.0),
+                (x: 0.6, y: 0.4, intensity: 0.85)
+            ]
+        )
+    ]
+}
 
 // ============================================================
 // MARK: - Seeded Random Number Generator
@@ -590,22 +844,48 @@ struct Challenge: Identifiable {
         return Double(reached) / Double(targets.count)
     }
     
-    /// Calculate star rating based on lights used (1-3 stars)
+    /// Calculate star rating based on lights used (1-3 stars) - More lenient thresholds
     func calculateStars(lightsUsed: Int, totalCoverage: Double) -> Int {
         // Must complete to get stars
-        guard isCompleted && totalCoverage >= 0.5 else { return 0 }
+        guard isCompleted && totalCoverage >= 0.4 else { return 0 }
         
-        // 3 stars: under or at max lights with high coverage
-        if lightsUsed <= maxLights && totalCoverage >= 0.8 {
+        // 3 stars: at or under max lights with good coverage (75%+)
+        if lightsUsed <= maxLights && totalCoverage >= 0.75 {
             return 3
         }
-        // 2 stars: at max lights
-        else if lightsUsed <= maxLights && totalCoverage >= 0.5 {
+        // 2 stars: at max lights with decent coverage (50%+) OR under max lights
+        else if (lightsUsed <= maxLights && totalCoverage >= 0.5) || 
+                (lightsUsed < maxLights && totalCoverage >= 0.4) {
             return 2
         }
-        // 1 star: completed but used extra lights
+        // 1 star: completed the challenge
         else {
             return 1
+        }
+    }
+    
+    /// Get human-readable explanation for star rating
+    func getStarExplanation(lightsUsed: Int, totalCoverage: Double) -> String {
+        let stars = calculateStars(lightsUsed: lightsUsed, totalCoverage: totalCoverage)
+        let coveragePct = Int(totalCoverage * 100)
+        
+        switch stars {
+        case 3:
+            return "Perfect! \(coveragePct)% coverage with \(lightsUsed)/\(maxLights) lights"
+        case 2:
+            if totalCoverage < 0.75 {
+                return "Great! Need \(75 - coveragePct)% more coverage for 3 stars"
+            } else {
+                return "Great! Use \(lightsUsed - maxLights) fewer lights for 3 stars"
+            }
+        case 1:
+            return "Complete! Optimize lights or coverage for more stars"
+        default:
+            if !isCompleted {
+                return "Reach all targets to earn stars"
+            } else {
+                return "Need \(40 - coveragePct)% more coverage"
+            }
         }
     }
     
@@ -1241,6 +1521,15 @@ class GalleryScene: SKScene {
     var maxLightsAllowed: Int = Int.max  // No limit in free mode
     var onLightPlaced: ((Int) -> Void)?  // Callback with current light count
     var onLightLimitReached: (() -> Void)?  // Callback when limit reached
+    
+    // ----------------------------------------------------------
+    // GIF Recording System
+    // ----------------------------------------------------------
+    
+    private var gifRecorder: GIFRecorder?
+    private var isRecordingGIF: Bool = false
+    private var recordingTimer: Timer?
+    var onGIFRecordingComplete: ((URL?) -> Void)?
 
     // ----------------------------------------------------------
     // Lifecycle
@@ -1960,6 +2249,89 @@ class GalleryScene: SKScene {
             sceneImage.draw(in: CGRect(origin: .zero, size: targetSize))
         }
     }
+    
+    // ----------------------------------------------------------
+    // GIF Recording Methods
+    // ----------------------------------------------------------
+    
+    /// Start recording frames for GIF export
+    func startGIFRecording(fps: Double = 12) {
+        stopGIFRecording()
+        
+        gifRecorder = GIFRecorder(targetFPS: fps, maxDuration: 12.0)
+        isRecordingGIF = true
+        
+        // Capture frames at target FPS
+        let interval = 1.0 / fps
+        recordingTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.captureGIFFrame()
+        }
+    }
+    
+    /// Capture a single frame for GIF
+    private func captureGIFFrame() {
+        guard isRecordingGIF, let recorder = gifRecorder else { return }
+        
+        // Capture at reasonable resolution for GIF (512x512)
+        if let frame = captureSceneImage(targetSize: CGSize(width: 512, height: 512)) {
+            recorder.addFrame(frame)
+        }
+    }
+    
+    /// Stop recording and export GIF
+    func stopGIFRecording(export: Bool = true) {
+        recordingTimer?.invalidate()
+        recordingTimer = nil
+        isRecordingGIF = false
+        
+        if export, let recorder = gifRecorder {
+            recorder.exportGIF { [weak self] url in
+                self?.onGIFRecordingComplete?(url)
+            }
+        }
+        
+        gifRecorder = nil
+    }
+    
+    /// Record a complete demo sequence as GIF (10-12 seconds)
+    func recordDemoAsGIF(
+        onProgress: @escaping (String) -> Void,
+        completion: @escaping (URL?) -> Void
+    ) {
+        clearAllLights()
+        clearGrowth()
+        
+        // Start recording
+        startGIFRecording(fps: 10)  // 10 FPS for smaller file size
+        
+        onProgress("Recording demo...")
+        
+        // Demo light positions for impressive visual
+        let demoLightPositions: [(CGPoint, TimeInterval, CGFloat)] = [
+            (CGPoint(x: size.width * 0.35, y: size.height * 0.55), 1.0, 1.0),
+            (CGPoint(x: size.width * 0.65, y: size.height * 0.50), 2.5, 0.9)
+        ]
+        
+        // Place lights with visual effects
+        for (pos, delay, intensity) in demoLightPositions {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.placePersistentLight(at: pos, intensity: intensity)
+                onProgress("Placing light...")
+            }
+        }
+        
+        // Signal growth after lights placed
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+            onProgress("Life growing toward light...")
+        }
+        
+        // Stop recording after growth completes (around 10 seconds)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) { [weak self] in
+            onProgress("Finalizing GIF...")
+            self?.stopGIFRecording(export: true)
+            self?.onGIFRecordingComplete = completion
+        }
+    }
 }
 
 // ============================================================
@@ -2059,6 +2431,18 @@ struct ContentView: View {
     // --- Background Cache ---
     @State private var cachedBackgroundKey: String = ""
     @State private var cachedBackgroundImage: UIImage? = nil
+    
+    // --- GIF Recording & Export ---
+    @State private var isRecordingGIF = false
+    @State private var gifExportProgress: String = ""
+    @State private var showGIFShareSheet = false
+    @State private var exportedGIFURL: URL? = nil
+    
+    // --- Toast Notifications ---
+    @StateObject private var toastManager = ToastManager()
+    
+    // --- Preset Export ---
+    @State private var showPresetPicker = false
 
     @StateObject private var coordinator = SceneCoordinator()
 
@@ -2099,6 +2483,48 @@ struct ContentView: View {
                 if showTutorial {
                     tutorialOverlay
                 }
+                
+                // Toast notification overlay
+                VStack {
+                    Spacer()
+                    if toastManager.isShowing {
+                        ToastView(
+                            message: toastManager.message,
+                            icon: toastManager.icon,
+                            color: toastManager.color
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .padding(.bottom, 100)
+                    }
+                }
+                .animation(.spring(response: 0.4), value: toastManager.isShowing)
+                
+                // GIF Recording indicator
+                if isRecordingGIF {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(.red)
+                                    .frame(width: 10, height: 10)
+                                    .opacity(0.8)
+                                Text("REC")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.red)
+                                Text(gifExportProgress)
+                                    .font(.caption)
+                                    .foregroundStyle(.white)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Capsule())
+                            .padding()
+                        }
+                        Spacer()
+                    }
+                }
             }
         }
         .background(Color.black.ignoresSafeArea())
@@ -2113,6 +2539,21 @@ struct ContentView: View {
             if let img = exportedImage {
                 ShareSheet(items: [img])
             }
+        }
+        .sheet(isPresented: $showGIFShareSheet) {
+            if let url = exportedGIFURL {
+                ShareSheet(items: [url])
+            }
+        }
+        .sheet(isPresented: $showPresetPicker) {
+            PresetPickerView(
+                onSelect: { preset in
+                    applyPreset(preset)
+                },
+                onExport: { preset in
+                    exportPresetSample(preset)
+                }
+            )
         }
         .alert("Creation Saved", isPresented: $showSavedAlert) {
             Button("OK") {}
@@ -2137,14 +2578,16 @@ struct ContentView: View {
                 refreshCanvas()
             }
         } message: {
-            VStack {
-                if challengeStars == 3 {
-                    Text("Perfect! 猸愨瓙猸怽nYou've mastered this challenge!")
-                } else if challengeStars == 2 {
-                    Text("Great job! 猸愨瓙\nTry using fewer lights for 3 stars.")
-                } else {
-                    Text("Completed! 猸怽nOptimize your approach for more stars.")
-                }
+            if let idx = currentChallengeIndex {
+                let challenge = Challenge.presets[idx]
+                let avgCoverage = challengeScore / 100
+                let explanation = challenge.getStarExplanation(
+                    lightsUsed: lightsUsedInChallenge, 
+                    totalCoverage: avgCoverage
+                )
+                Text(explanation)
+            } else {
+                Text("Challenge completed!")
             }
         }
     }
@@ -2763,6 +3206,7 @@ struct ContentView: View {
             if let idx = currentChallengeIndex {
                 let challenge = Challenge.presets[idx]
                 let bestStars = getBestStars(for: idx)
+                let avgCoverage = challengeScore / 100.0
                 
                 VStack(alignment: .leading, spacing: 8) {
                     // Challenge header with difficulty
@@ -2808,7 +3252,7 @@ struct ContentView: View {
                             .foregroundStyle(lightsUsedInChallenge >= challenge.maxLights ? .orange : .cyan)
                     }
                     
-                    // Progress bar
+                    // Progress bar with threshold markers
                     GeometryReader { geo in
                         ZStack(alignment: .leading) {
                             RoundedRectangle(cornerRadius: 4)
@@ -2822,15 +3266,58 @@ struct ContentView: View {
                                     )
                                 )
                                 .frame(width: geo.size.width * CGFloat(min(1, challengeScore / 100)))
+                            
+                            // Star threshold markers (50%, 75%)
+                            Rectangle()
+                                .fill(.white.opacity(0.5))
+                                .frame(width: 1, height: 10)
+                                .position(x: geo.size.width * 0.5, y: 5)
+                            Rectangle()
+                                .fill(.yellow.opacity(0.7))
+                                .frame(width: 1, height: 10)
+                                .position(x: geo.size.width * 0.75, y: 5)
                         }
                     }
                     .frame(height: 10)
                     
-                    // Coverage and stars
+                    // Coverage percentage with star thresholds explained
                     HStack {
-                        Text("Coverage: \(Int(challengeScore))%")
-                            .font(.caption)
-                            .foregroundStyle(challengeScore >= 100 ? .green : .white)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Coverage: \(Int(challengeScore))%")
+                                .font(.caption.bold())
+                                .foregroundStyle(challengeScore >= 75 ? .green : (challengeScore >= 50 ? .cyan : .white))
+                            
+                            // Star threshold hints
+                            HStack(spacing: 12) {
+                                HStack(spacing: 2) {
+                                    Image(systemName: "star")
+                                        .font(.system(size: 8))
+                                    Text("50%")
+                                }
+                                .foregroundStyle(avgCoverage >= 0.5 ? .green : .gray)
+                                
+                                HStack(spacing: 2) {
+                                    Image(systemName: "star.fill")
+                                        .font(.system(size: 8))
+                                    Image(systemName: "star.fill")
+                                        .font(.system(size: 8))
+                                    Text("≤\(challenge.maxLights)💡")
+                                }
+                                .foregroundStyle(avgCoverage >= 0.5 && lightsUsedInChallenge <= challenge.maxLights ? .cyan : .gray)
+                                
+                                HStack(spacing: 2) {
+                                    Image(systemName: "star.fill")
+                                        .font(.system(size: 8))
+                                    Image(systemName: "star.fill")
+                                        .font(.system(size: 8))
+                                    Image(systemName: "star.fill")
+                                        .font(.system(size: 8))
+                                    Text("75%")
+                                }
+                                .foregroundStyle(avgCoverage >= 0.75 ? .yellow : .gray)
+                            }
+                            .font(.system(size: 9))
+                        }
                         
                         Spacer()
                         
@@ -2847,14 +3334,16 @@ struct ContentView: View {
                         
                         // Best record
                         if bestStars > 0 {
-                            Text("Best: ")
-                                .font(.caption2)
-                                .foregroundStyle(.gray)
-                            HStack(spacing: 1) {
-                                ForEach(0..<bestStars, id: \.self) { _ in
-                                    Image(systemName: "star.fill")
-                                        .font(.caption2)
-                                        .foregroundStyle(.orange)
+                            VStack(spacing: 2) {
+                                Text("Best")
+                                    .font(.system(size: 8))
+                                    .foregroundStyle(.gray)
+                                HStack(spacing: 1) {
+                                    ForEach(0..<bestStars, id: \.self) { _ in
+                                        Image(systemName: "star.fill")
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(.orange)
+                                    }
                                 }
                             }
                         }
@@ -2879,6 +3368,7 @@ struct ContentView: View {
             // --- Save & Share ---
             sectionLabel("SAVE & SHARE")
             
+            // Primary export options
             HStack(spacing: 12) {
                 Button { saveParametersJSON() } label: {
                     Label("Save Params", systemImage: "doc.text")
@@ -2887,18 +3377,62 @@ struct ContentView: View {
                 .buttonStyle(.bordered).tint(.orange)
                 
                 Button { exportHighRes() } label: {
-                    Label("Export", systemImage: "photo")
+                    Label("Export 2K", systemImage: "photo")
                         .font(.caption)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(isExporting)
             }
             
+            // Advanced export options
+            HStack(spacing: 12) {
+                // GIF Demo Export - Key for judges
+                Button { recordDemoGIF() } label: {
+                    HStack {
+                        Image(systemName: isRecordingGIF ? "stop.fill" : "film")
+                        Text(isRecordingGIF ? "Recording..." : "Record GIF")
+                    }
+                    .font(.caption)
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(.purple)
+                .disabled(isRecordingGIF)
+                
+                // 4K Export
+                Button { exportUltraHighRes() } label: {
+                    HStack {
+                        Image(systemName: "4k.tv")
+                        Text("Export 4K")
+                    }
+                    .font(.caption)
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .tint(.green)
+                .disabled(isExporting)
+            }
+            
+            // Showcase Presets - For submissions
+            Button { showPresetPicker = true } label: {
+                HStack {
+                    Image(systemName: "sparkles.rectangle.stack")
+                    Text("Showcase Presets")
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                }
+                .font(.subheadline)
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .tint(.cyan)
+            
             // Tips
             VStack(alignment: .leading, spacing: 6) {
                 tipRow(icon: "hand.tap.fill", text: "Long press to place light", color: .cyan)
                 tipRow(icon: "leaf.fill", text: "Life grows toward light", color: .green)
-                tipRow(icon: "square.and.arrow.up", text: "Export includes lighting", color: .orange)
+                tipRow(icon: "film", text: "Record GIF for submissions", color: .purple)
             }
             .padding(.top, 8)
             
@@ -3180,8 +3714,9 @@ struct ContentView: View {
         let challenge = Challenge.presets[challengeIndex]
         var totalCoverage: Double = 0
         var reachedCount = 0
+        var newlyReachedTargets: [(index: Int, coverage: Int, required: Int)] = []
         
-        for target in challenge.targets {
+        for (index, target) in challenge.targets.enumerated() {
             // Use grid sampling for accurate coverage calculation
             let coverage = target.calculateGridCoverage(segments: segments, sampleCount: 10)
             totalCoverage += Double(coverage)
@@ -3191,7 +3726,23 @@ struct ContentView: View {
             if isReached {
                 reachedCount += 1
                 coordinator.scene?.markTargetReached(target.id)
+                
+                // Track newly reached targets for toast notification
+                newlyReachedTargets.append((
+                    index: index,
+                    coverage: Int(coverage * 100),
+                    required: Int(target.requiredCoverage * 100)
+                ))
             }
+        }
+        
+        // Show toast for first reached target (to avoid spam)
+        if let firstReached = newlyReachedTargets.first {
+            toastManager.showTargetReached(
+                targetIndex: firstReached.index,
+                coverage: firstReached.coverage,
+                required: firstReached.required
+            )
         }
         
         // Calculate overall challenge score based on average coverage
@@ -3203,6 +3754,17 @@ struct ContentView: View {
         if reachedCount == challenge.targets.count {
             let stars = challenge.calculateStars(lightsUsed: lightsUsedInChallenge, totalCoverage: avgCoverage)
             challengeStars = stars
+            
+            // Show star rating explanation via toast
+            let explanation = challenge.getStarExplanation(
+                lightsUsed: lightsUsedInChallenge,
+                totalCoverage: avgCoverage
+            )
+            
+            // Delay toast slightly to let the target reach animation finish
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.toastManager.showStarRating(stars: stars, reason: explanation)
+            }
             
             // Save achievement if it's better than previous
             saveAchievement(challengeIndex: challengeIndex, stars: stars, coverage: avgCoverage)
@@ -3588,6 +4150,359 @@ struct ContentView: View {
         try? data.write(to: url)
         savedFileName = name
         showSavedAlert = true
+    }
+    
+    // -------------------------------------------------------
+    // MARK: Preset & GIF Export
+    // -------------------------------------------------------
+    
+    /// Apply a showcase preset
+    private func applyPreset(_ preset: SamplePreset) {
+        seed = preset.seed
+        cosmicTheme = preset.theme
+        lifeStage = preset.lifeStage
+        branchAngle = preset.branchAngle
+        phototropismStrength = preset.phototropism
+        
+        // Clear existing lights and apply preset lights
+        coordinator.scene?.clearAllLights()
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            guard let scene = coordinator.scene else { return }
+            
+            for lightPos in preset.lightPositions {
+                let point = CGPoint(
+                    x: lightPos.x * scene.size.width,
+                    y: lightPos.y * scene.size.height
+                )
+                scene.placePersistentLight(at: point, intensity: lightPos.intensity)
+            }
+            
+            refreshCanvasAnimated()
+            toastManager.show(
+                message: "Applied: \(preset.name)",
+                icon: "sparkles",
+                color: .cyan
+            )
+        }
+    }
+    
+    /// Export a preset as high-quality sample with JSON
+    private func exportPresetSample(_ preset: SamplePreset) {
+        // Apply the preset first
+        applyPreset(preset)
+        
+        // Wait for canvas to render, then export
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            exportHighRes()
+            
+            // Also save JSON
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                saveParametersJSON()
+            }
+        }
+    }
+    
+    /// Record and export demo as GIF
+    private func recordDemoGIF() {
+        guard !isRecordingGIF else { return }
+        
+        isRecordingGIF = true
+        isAnimatedGrowth = true
+        gifExportProgress = "Starting..."
+        
+        // Clear and setup
+        coordinator.scene?.clearAllLights()
+        coordinator.scene?.clearGrowth()
+        
+        // Setup GIF recorder callback
+        coordinator.scene?.onGIFRecordingComplete = { [self] url in
+            isRecordingGIF = false
+            gifExportProgress = ""
+            
+            if let url = url {
+                exportedGIFURL = url
+                showGIFShareSheet = true
+                toastManager.show(
+                    message: "Demo GIF exported!",
+                    icon: "film",
+                    color: .green
+                )
+            } else {
+                toastManager.show(
+                    message: "GIF export failed",
+                    icon: "exclamationmark.triangle",
+                    color: .red
+                )
+            }
+        }
+        
+        // Start recording with demo
+        coordinator.scene?.recordDemoAsGIF(
+            onProgress: { [self] progress in
+                gifExportProgress = progress
+            },
+            completion: { [self] url in
+                isRecordingGIF = false
+                
+                if let url = url {
+                    exportedGIFURL = url
+                    showGIFShareSheet = true
+                }
+            }
+        )
+        
+        // Trigger growth after lights placed
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.8) {
+            refreshCanvasAnimated()
+        }
+    }
+    
+    /// Export current creation as 4096x4096 (tile-based for memory efficiency)
+    private func exportUltraHighRes() {
+        guard !isExporting else { return }
+        isExporting = true
+        toastManager.show(message: "Exporting 4K...", icon: "photo", color: .orange)
+        
+        // Capture current state
+        let currentSeed = seed
+        let currentTheme = cosmicTheme
+        let currentStage = lifeStage
+        let currentAngle = branchAngle
+        let currentWarp = warpStrength
+        let warpEnabled = enableWarp
+        let currentIntensity = cosmicIntensity
+        let vignetteEnabled = enableVignette
+        let currentPhototrop = phototropismStrength
+        
+        // Get light sources
+        let lightSources = getLightSourcesForRendering(canvasSize: CGSize(width: 4096, height: 4096))
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            let target = 4096
+            
+            // Generate ultra high-res using tile rendering for memory efficiency
+            let noiseParams = NoiseParameters(
+                frequency: 0.6,
+                octaves: 6,
+                persistence: 0.5,
+                lacunarity: 2.0,
+                warpFrequency: 0.8,
+                warpStrength: currentWarp,
+                gamma: 1.4 + (1.0 - currentIntensity) * 0.6,
+                enableWarp: warpEnabled
+            )
+            
+            // Generate background at full resolution
+            guard let backgroundImage = generateAdvancedNoiseImage(
+                width: target, height: target,
+                params: noiseParams,
+                seed: Int32(currentSeed),
+                gradient: currentTheme.gradient,
+                addGrain: true
+            ) else {
+                DispatchQueue.main.async { 
+                    self.isExporting = false
+                    self.toastManager.show(message: "Export failed", icon: "xmark.circle", color: .red)
+                }
+                return
+            }
+            
+            // Generate L-System at high resolution
+            let sys = LSystem(
+                axiom: "F",
+                rules: [("F", "FF+[+F-F-F]-[-F+F+F]")],
+                angle: currentAngle
+            )
+            let instr = sys.generate(iterations: currentStage.iterations)
+            let linLen = max(0.3, CGFloat(target) / pow(3.0, CGFloat(currentStage.iterations)))
+            
+            // Scale light positions
+            let scaledLights = lightSources.map { light in
+                LightSource(
+                    position: CGPoint(x: light.position.x * 8, y: light.position.y * 8),
+                    intensity: light.intensity
+                )
+            }
+            
+            let renderParams = LSystemRenderParams(
+                baseLineWidth: CGFloat(4.0 + Double(currentStage.rawValue) * 0.5) * 4.0,
+                widthDecay: 0.65,
+                angleVariation: 8.0,
+                enableGlow: true,
+                glowRadius: 32.0,
+                glowAlpha: 0.45,
+                colorGradient: .lifeGradient,
+                depthColorFade: true,
+                lightSources: scaledLights,
+                phototropismStrength: CGFloat(currentPhototrop),
+                lightColorInfluence: 0.35,
+                randomSeed: UInt64(currentSeed)
+            )
+            
+            let lifeImage = sys.renderAdvanced(
+                instructions: instr,
+                canvasSize: CGSize(width: target, height: target),
+                lineLength: linLen,
+                params: renderParams
+            )
+            
+            // Composite
+            var finalImage = compositeImages(
+                base: backgroundImage,
+                overlay: lifeImage,
+                blendMode: .plusLighter,
+                alpha: 1.0
+            )
+            
+            if vignetteEnabled {
+                finalImage = applyVignette(to: finalImage, intensity: 0.4)
+            }
+            
+            DispatchQueue.main.async {
+                self.isExporting = false
+                self.exportedImage = finalImage
+                self.showShareSheet = true
+                self.toastManager.show(message: "4K export ready!", icon: "checkmark.circle", color: .green)
+            }
+        }
+    }
+}
+
+// ============================================================
+// MARK: - Preset Picker View (Showcase Samples)
+// ============================================================
+
+struct PresetPickerView: View {
+    @Environment(\.dismiss) var dismiss
+    let onSelect: (SamplePreset) -> Void
+    let onExport: (SamplePreset) -> Void
+    
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                LazyVStack(spacing: 20) {
+                    Text("High-Quality Showcase Presets")
+                        .font(.headline)
+                        .foregroundStyle(.gray)
+                        .padding(.top)
+                    
+                    Text("Each preset is designed for maximum visual impact.\nUse these for submissions and demonstrations.")
+                        .font(.caption)
+                        .foregroundStyle(.gray.opacity(0.7))
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                    
+                    ForEach(SamplePreset.showcasePresets) { preset in
+                        PresetCard(preset: preset) {
+                            onSelect(preset)
+                            dismiss()
+                        } onExport: {
+                            onExport(preset)
+                            dismiss()
+                        }
+                    }
+                }
+                .padding()
+            }
+            .background(Color.black)
+            .navigationTitle("Preset Gallery")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+struct PresetCard: View {
+    let preset: SamplePreset
+    let onApply: () -> Void
+    let onExport: () -> Void
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(preset.name)
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    
+                    Text(preset.description)
+                        .font(.caption)
+                        .foregroundStyle(.gray)
+                }
+                
+                Spacer()
+                
+                // Theme indicator
+                Circle()
+                    .fill(Color(preset.theme.gradient.colorAt(0.5)))
+                    .frame(width: 24, height: 24)
+            }
+            
+            // Details
+            HStack(spacing: 16) {
+                Label(preset.theme.rawValue, systemImage: "sparkles")
+                Label(preset.lifeStage.name, systemImage: "leaf.fill")
+                Label("Seed: \(preset.seed)", systemImage: "number")
+            }
+            .font(.caption2)
+            .foregroundStyle(.gray)
+            
+            // Light positions visualization
+            HStack(spacing: 4) {
+                Text("Lights:")
+                    .font(.caption2)
+                    .foregroundStyle(.gray)
+                
+                ForEach(0..<preset.lightPositions.count, id: \.self) { i in
+                    Circle()
+                        .fill(.cyan)
+                        .frame(width: 8, height: 8)
+                }
+            }
+            
+            // Action buttons
+            HStack(spacing: 12) {
+                Button {
+                    onApply()
+                } label: {
+                    HStack {
+                        Image(systemName: "play.fill")
+                        Text("Apply & Play")
+                    }
+                    .font(.subheadline.bold())
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.cyan)
+                
+                Button {
+                    onExport()
+                } label: {
+                    HStack {
+                        Image(systemName: "square.and.arrow.up")
+                        Text("Export")
+                    }
+                    .font(.subheadline)
+                }
+                .buttonStyle(.bordered)
+                .tint(.orange)
+            }
+        }
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.cyan.opacity(0.2), lineWidth: 1)
+                )
+        )
     }
 }
 
