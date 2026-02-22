@@ -396,7 +396,7 @@ struct StylePreset: Identifiable {
     let lSystemAngle: Double
 }
 
-/// Codable parameter set 鈥?export as JSON to reproduce any artwork.
+/// Codable parameter set - export as JSON to reproduce any artwork.
 struct ParameterSet: Codable {
     var theme: String
     var lifeStage: Int
@@ -835,6 +835,10 @@ struct Challenge: Identifiable {
     var targets: [ChallengeTarget]
     let difficulty: Int  // 1-5
     
+    // NOTE: isCompleted and progress properties are not used in the actual game logic
+    // because Challenge.presets is immutable. The actual tracking uses local counters.
+    // These are kept for potential future mutable challenge state.
+    
     var isCompleted: Bool {
         targets.allSatisfy { $0.isReached }
     }
@@ -845,9 +849,10 @@ struct Challenge: Identifiable {
     }
     
     /// Calculate star rating based on lights used (1-3 stars) - More lenient thresholds
+    /// NOTE: Call this only when all targets are reached (reachedCount == targets.count)
     func calculateStars(lightsUsed: Int, totalCoverage: Double) -> Int {
-        // Must complete to get stars
-        guard isCompleted && totalCoverage >= 0.4 else { return 0 }
+        // Must have minimum coverage to get stars (completion is verified by caller)
+        guard totalCoverage >= 0.4 else { return 0 }
         
         // 3 stars: at or under max lights with good coverage (75%+)
         if lightsUsed <= maxLights && totalCoverage >= 0.75 {
@@ -865,6 +870,7 @@ struct Challenge: Identifiable {
     }
     
     /// Get human-readable explanation for star rating
+    /// NOTE: Call this only when all targets are reached (completion verified by caller)
     func getStarExplanation(lightsUsed: Int, totalCoverage: Double) -> String {
         let stars = calculateStars(lightsUsed: lightsUsed, totalCoverage: totalCoverage)
         let coveragePct = Int(totalCoverage * 100)
@@ -881,11 +887,8 @@ struct Challenge: Identifiable {
         case 1:
             return "Complete! Optimize lights or coverage for more stars"
         default:
-            if !isCompleted {
-                return "Reach all targets to earn stars"
-            } else {
-                return "Need \(40 - coveragePct)% more coverage"
-            }
+            // Stars = 0 means coverage was below threshold despite reaching targets
+            return "Need \(40 - coveragePct)% more coverage"
         }
     }
     
@@ -1640,7 +1643,7 @@ class GalleryScene: SKScene {
         let pos = touch.location(in: self)
         touchStartPoint = pos
 
-        // Begin long-press timer 鈫?place persistent light
+        // Begin long-press timer -> place persistent light
         longPressTimer?.invalidate()
         longPressTimer = Timer.scheduledTimer(
             withTimeInterval: 0.55, repeats: false
@@ -2370,7 +2373,7 @@ struct SpriteKitContainer: UIViewRepresentable {
 
     func updateUIView(_ uiView: SKView, context: Context) {
         // Updates are driven through the coordinator, not through
-        // SwiftUI state diffing 鈥?avoids expensive re-renders.
+        // SwiftUI state diffing - avoids expensive re-renders.
     }
 }
 
@@ -2807,12 +2810,12 @@ struct ContentView: View {
                 .font(.system(size: 32, weight: .bold, design: .rounded))
                 .foregroundStyle(.white)
             
-            Text("鐢熷懡鍚戝厜鑰岀敓")
+            Text("Life Grows Toward Light")
                 .font(.title3)
                 .foregroundStyle(.cyan)
             
             VStack(alignment: .leading, spacing: 12) {
-                Text("In nature, plants grow toward light sources 鈥?a phenomenon called phototropism.")
+                Text("In nature, plants grow toward light sources - a phenomenon called phototropism.")
                     .font(.body)
                     .foregroundStyle(.gray)
                 
