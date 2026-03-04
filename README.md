@@ -1,0 +1,1 @@
+Light of Life is an interactive generative art app designed for the Swift Student Challenge. Users become "Guardians of Light," placing light sources in cosmic nebulae to awaken dormant seeds of life. Using L-System fractal algorithms, life grows toward the light, forming unique organic patterns. Every creation is a one-of-a-kind journey of life.
